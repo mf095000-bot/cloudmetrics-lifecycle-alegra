@@ -12,13 +12,21 @@ Implementa el contrato definido en:
 Todas las decisiones técnicas delegadas explícitamente por
 03_SIMULATION_PARAMETERS.md §5 se documentan en generation_params.json.
 
-Principio anti-fabricación: las dimensiones de usuario (country, role,
-industry, company_size, use_case, acquisition_channel) se asignan de forma
-estadísticamente independiente de la trayectoria de comportamiento de cada
-usuario. Ningún paso del funnel, ninguna velocidad hacia First Value y
-ninguna probabilidad de converted_to_paid está condicionada por esas
-dimensiones. Cualquier relación que el diagnóstico encuentre después será
-producto del ruido aleatorio de la simulación, no de una regla impuesta aquí.
+Principio anti-fabricación (versión revisada): las dimensiones de usuario
+(country, role, industry, company_size, use_case, acquisition_channel)
+pueden tener una influencia real, pero pequeña y difusa, sobre el
+comportamiento posterior (progresión del funnel, velocidad hacia First
+Value, converted_to_paid). Esa influencia se implementa como un efecto
+aleatorio por cada valor de catálogo, generado con la semilla fija del
+script -- nunca elegido a mano ni ajustado después de observar los
+resultados para producir una historia. Los efectos están repartidos entre
+las 6 dimensiones simultáneamente, de forma que ningún valor individual
+(un país, un rol, etc.) queda diseñado como "ganador" o "perdedor": la
+magnitud se calibró una única vez a nivel de escala general (sigma), nunca
+por dirección de un valor específico. Esto permite que el diagnóstico
+posterior (fase 4) encuentre relaciones genuinas entre quién es el usuario,
+qué hace y qué resultado obtiene, sin que esas relaciones estén
+predeterminadas por el diseño del generador.
 """
 
 import csv
@@ -134,6 +142,51 @@ LAST_NAMES = [
     "Castro", "Rojas", "Mendoza", "Jimenez", "Aguilar", "Vega", "Contreras",
 ]
 
+DIMENSION_CATALOGS = {
+    "country": COUNTRIES,
+    "role": ROLES,
+    "industry": INDUSTRIES,
+    "company_size": COMPANY_SIZES,
+    "use_case": USE_CASES,
+    "acquisition_channel": ACQUISITION_CHANNELS,
+}
+
+# Sigmas de calibración de escala general (no de dirección por valor):
+# magnitud elegida una sola vez, antes de observar ningún resultado, para
+# que la heterogeneidad entre segmentos sea real pero no domine el sistema.
+SIGMA_FUNNEL_LOGIT = 0.10       # por dimensión, en espacio logit
+SIGMA_SPEED_LOG_HOURS = 0.15    # por dimensión, en espacio log-horas
+SIGMA_CONVERSION_PROB = 0.02    # por dimensión, en espacio de probabilidad
+
+# Efectos aleatorios por valor de catálogo, generados con la semilla fija.
+# Nadie elige qué país/rol/industria/tamaño/use_case/canal "gana" -- lo
+# decide random.gauss(). Se documentan íntegros en generation_params.json.
+CATEGORY_FUNNEL_EFFECT = {
+    dim: {val: random.gauss(0, SIGMA_FUNNEL_LOGIT) for val in values}
+    for dim, values in DIMENSION_CATALOGS.items()
+}
+CATEGORY_SPEED_EFFECT = {
+    dim: {val: random.gauss(0, SIGMA_SPEED_LOG_HOURS) for val in values}
+    for dim, values in DIMENSION_CATALOGS.items()
+}
+CATEGORY_CONVERSION_EFFECT = {
+    dim: {val: random.gauss(0, SIGMA_CONVERSION_PROB) for val in values}
+    for dim, values in DIMENSION_CATALOGS.items()
+}
+
+
+def funnel_shift_for(identity):
+    return sum(CATEGORY_FUNNEL_EFFECT[dim][identity[dim]] for dim in DIMENSION_CATALOGS)
+
+
+def speed_shift_for(identity):
+    return sum(CATEGORY_SPEED_EFFECT[dim][identity[dim]] for dim in DIMENSION_CATALOGS)
+
+
+def conversion_shift_for(identity):
+    return sum(CATEGORY_CONVERSION_EFFECT[dim][identity[dim]] for dim in DIMENSION_CATALOGS)
+
+
 COMPANY_WORDS = [
     "nova", "cumbre", "vertex", "orbita", "andina", "azul", "delta", "prisma",
     "raiz", "lumen", "meridian", "polo", "cielo", "bosque", "sol", "atlas",
@@ -155,6 +208,16 @@ def random_alnum(length):
 
 def clamp(value, lo, hi):
     return max(lo, min(hi, value))
+
+
+def logit(p):
+    p = clamp(p, 1e-6, 1 - 1e-6)
+    return math.log(p / (1 - p))
+
+
+def sigmoid(x):
+    x = clamp(x, -30, 30)
+    return 1 / (1 + math.exp(-x))
 
 
 def random_datetime_in_july():
@@ -273,21 +336,32 @@ for identity in completed_identities:
     identity["dashboard_created_ts"] = None
     identity["insight_viewed_ts"] = None
 
-    if random.random() > P_ONBOARDING_STARTED:
+    # Desplazamiento de propensión de este usuario a través de sus 6
+    # dimensiones (ver CATEGORY_FUNNEL_EFFECT arriba). Se aplica igual a las
+    # 6 transiciones del funnel -- no privilegia ningún paso en particular.
+    f_shift = funnel_shift_for(identity)
+    p_onb_started = sigmoid(logit(P_ONBOARDING_STARTED) + f_shift)
+    p_profile = sigmoid(logit(P_PROFILE_COMPLETED) + f_shift)
+    p_onb_completed = sigmoid(logit(P_ONBOARDING_COMPLETED) + f_shift)
+    p_dsc = sigmoid(logit(P_DATA_SOURCE_CONNECTED) + f_shift)
+    p_dash = sigmoid(logit(P_DASHBOARD_CREATED) + f_shift)
+    p_insight = sigmoid(logit(P_INSIGHT_VIEWED) + f_shift)
+
+    if random.random() > p_onb_started:
         continue
     ts = signup_ts + timedelta(minutes=lognormal_minutes(45, 1.3, 1, 2880))
     if ts > OBSERVATION_CUTOFF:
         continue
     identity["onboarding_started_ts"] = ts
 
-    if random.random() > P_PROFILE_COMPLETED:
+    if random.random() > p_profile:
         continue
     ts2 = ts + timedelta(minutes=lognormal_minutes(20, 1.1, 1, 720))
     if ts2 > OBSERVATION_CUTOFF:
         continue
     identity["profile_completed_ts"] = ts2
 
-    if random.random() > P_ONBOARDING_COMPLETED:
+    if random.random() > p_onb_completed:
         continue
     ts3 = ts2 + timedelta(minutes=lognormal_minutes(12, 1.0, 1, 480))
     if ts3 > OBSERVATION_CUTOFF:
@@ -300,8 +374,12 @@ for identity in completed_identities:
     # Value (rápido / tardío / nunca) sin fijar de antemano proporciones
     # exactas por grupo -- la proporción que cae en cada lado de la ventana
     # de 7 días es una consecuencia de la distribución, no un parámetro
-    # impuesto directamente.
-    mu = math.log(48.0)  # mediana ~48h (2 días) desde onboarding_completed
+    # impuesto directamente. La mediana se desplaza levemente según las
+    # dimensiones del usuario (CATEGORY_SPEED_EFFECT), reflejando que
+    # distintos perfiles pueden avanzar a distinto ritmo -- sin fijar de
+    # antemano cuál perfil es más rápido.
+    speed_shift = speed_shift_for(identity)
+    mu = math.log(48.0) + speed_shift  # mediana base ~48h (2 días)
     total_fv_hours = clamp(random.lognormvariate(mu, 1.6), 0.15, 1440)
 
     # Se reparte el tiempo total entre los tres tramos con pesos aleatorios
@@ -311,21 +389,21 @@ for identity in completed_identities:
     wsum = w1 + w2 + w3
     h1, h2, h3 = (total_fv_hours * w1 / wsum, total_fv_hours * w2 / wsum, total_fv_hours * w3 / wsum)
 
-    if random.random() > P_DATA_SOURCE_CONNECTED:
+    if random.random() > p_dsc:
         continue
     ts4 = ts3 + timedelta(hours=h1)
     if ts4 > OBSERVATION_CUTOFF:
         continue
     identity["data_source_connected_ts"] = ts4
 
-    if random.random() > P_DASHBOARD_CREATED:
+    if random.random() > p_dash:
         continue
     ts5 = ts4 + timedelta(hours=h2)
     if ts5 > OBSERVATION_CUTOFF:
         continue
     identity["dashboard_created_ts"] = ts5
 
-    if random.random() > P_INSIGHT_VIEWED:
+    if random.random() > p_insight:
         continue
     ts6 = ts5 + timedelta(hours=h3)
     if ts6 > OBSERVATION_CUTOFF:
@@ -435,6 +513,7 @@ for identity in completed_identities:
         + 0.02 * n_features
         + 0.05 * shared
         + 0.01 * math.log1p(n_dashboard_views)
+        + conversion_shift_for(identity)  # efecto difuso por dimensiones de usuario
         + random.gauss(0, 0.07)  # ruido individual, evita determinismo
     )
     p_convert = clamp(score, 0.01, 0.95)
@@ -606,13 +685,35 @@ params = {
     },
     "converted_to_paid_mechanism": (
         "logistic-ish score = base_rate + f(sessions, distinct_features_used, "
-        "dashboard_shared, dashboard_views) + gaussian noise; NUNCA usa el umbral "
+        "dashboard_shared, dashboard_views) + efecto difuso por dimensiones de "
+        "usuario (conversion_shift_for) + gaussian noise; NUNCA usa el umbral "
         "de 7 dias ni ningun booleano equivalente a activation_status."
     ),
+    "category_effects": {
+        "description": (
+            "Efectos aleatorios por valor de catalogo (generados con la semilla "
+            "fija, nunca elegidos a mano ni reajustados tras observar resultados). "
+            "Se suman a traves de las 6 dimensiones para producir un unico "
+            "desplazamiento por usuario, aplicado a: (a) las 6 probabilidades de "
+            "transicion del funnel en espacio logit, (b) la mediana de tiempo "
+            "hacia First Value en espacio log-horas, (c) el score de "
+            "converted_to_paid en espacio de probabilidad."
+        ),
+        "sigma_funnel_logit_per_dimension": SIGMA_FUNNEL_LOGIT,
+        "sigma_speed_log_hours_per_dimension": SIGMA_SPEED_LOG_HOURS,
+        "sigma_conversion_prob_per_dimension": SIGMA_CONVERSION_PROB,
+        "funnel_effect": CATEGORY_FUNNEL_EFFECT,
+        "speed_effect": CATEGORY_SPEED_EFFECT,
+        "conversion_effect": CATEGORY_CONVERSION_EFFECT,
+    },
     "notes": [
         "Las dimensiones de usuario (country, role, industry, company_size, "
-        "use_case, acquisition_channel) se asignan de forma independiente de "
-        "la trayectoria de comportamiento de cada usuario.",
+        "use_case, acquisition_channel) se asignan sin condicionar el catalogo "
+        "en si, pero SI tienen una influencia real (pequeña y difusa, ver "
+        "category_effects) sobre el funnel, la velocidad hacia First Value y "
+        "converted_to_paid -- para que el diagnostico QUIEN->QUE HACE->QUE "
+        "RESULTADO tenga señal genuina que descubrir, sin que ningun valor de "
+        "catalogo este diseñado de antemano como ganador o perdedor.",
         "session_started no se genera para identidades pre-account (decision "
         "tecnica: unicamente registration_started/registration_completed antes "
         "de crear cuenta, para mantener el modelo de identidad simple y "
