@@ -1,0 +1,24 @@
+{
+  "seed": 20260701,
+  "n_completed_users": 10000,
+  "n_registration_started_total": 16129,
+  "n_registration_abandoned": 6129,
+  "registration_completion_rate_target": 0.62,
+  "cohort_start": "2026-07-01T00:00:00",
+  "cohort_end": "2026-07-31T23:59:59",
+  "observation_cutoff": "2026-09-20T23:59:59",
+  "funnel_transition_probabilities": {
+    "onboarding_started_given_signup": 0.9,
+    "profile_completed_given_onboarding_started": 0.87,
+    "onboarding_completed_given_profile_completed": 0.9,
+    "data_source_connected_given_onboarding_completed": 0.83,
+    "dashboard_created_given_data_source_connected": 0.8,
+    "insight_viewed_given_dashboard_created": 0.78
+  },
+  "converted_to_paid_mechanism": "logistic-ish score = base_rate + f(sessions, distinct_features_used, dashboard_shared, dashboard_views) + gaussian noise; NUNCA usa el umbral de 7 dias ni ningun booleano equivalente a activation_status.",
+  "notes": [
+    "Las dimensiones de usuario (country, role, industry, company_size, use_case, acquisition_channel) se asignan de forma independiente de la trayectoria de comportamiento de cada usuario.",
+    "session_started no se genera para identidades pre-account (decision tecnica: unicamente registration_started/registration_completed antes de crear cuenta, para mantener el modelo de identidad simple y coherente con 02_DATA_GENERATION_SPEC.md seccion 5).",
+    "El orden entre los tres eventos de First Value no queda rigidamente fijado a nivel de eventos repetidos: una fraccion de usuarios genera ocurrencias adicionales de data_source_connected/dashboard_created/insight_viewed despues de completar la secuencia inicial."
+  ]
+}
