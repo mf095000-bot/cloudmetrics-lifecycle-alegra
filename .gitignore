@@ -1,0 +1,4 @@
+# Secretos y configuración local — nunca versionar
+.env
+.env.*
+!.env.example
