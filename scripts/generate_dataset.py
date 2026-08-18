@@ -175,8 +175,22 @@ CATEGORY_CONVERSION_EFFECT = {
 }
 
 
+# Número de transiciones secuenciales del funnel a las que se aplica el
+# desplazamiento combinado de un usuario (onboarding_started, profile_completed,
+# onboarding_completed, data_source_connected, dashboard_created, insight_viewed).
+# Corrección estructural: si el mismo desplazamiento se aplicara íntegro en cada
+# una de las N_FUNNEL_GATES transiciones, un efecto individualmente modesto por
+# dimensión terminaría compuesto multiplicativamente N_FUNNEL_GATES veces a lo
+# largo de la cadena. Repartir el desplazamiento combinado entre las N_FUNNEL_GATES
+# transiciones (dividir entre N_FUNNEL_GATES) hace que la magnitud agregada que
+# efectivamente experimenta un usuario a lo largo de todo el funnel sea del mismo
+# orden que la calibración original por dimensión, en vez de amplificarse.
+N_FUNNEL_GATES = 6
+
+
 def funnel_shift_for(identity):
-    return sum(CATEGORY_FUNNEL_EFFECT[dim][identity[dim]] for dim in DIMENSION_CATALOGS)
+    total = sum(CATEGORY_FUNNEL_EFFECT[dim][identity[dim]] for dim in DIMENSION_CATALOGS)
+    return total / N_FUNNEL_GATES
 
 
 def speed_shift_for(identity):
@@ -337,8 +351,11 @@ for identity in completed_identities:
     identity["insight_viewed_ts"] = None
 
     # Desplazamiento de propensión de este usuario a través de sus 6
-    # dimensiones (ver CATEGORY_FUNNEL_EFFECT arriba). Se aplica igual a las
-    # 6 transiciones del funnel -- no privilegia ningún paso en particular.
+    # dimensiones (ver CATEGORY_FUNNEL_EFFECT arriba), ya repartido entre las
+    # N_FUNNEL_GATES transiciones (funnel_shift_for devuelve total/6). Se
+    # aplica igual a las 6 transiciones del funnel -- no privilegia ningún
+    # paso en particular, y no se compone 6 veces porque cada gate solo
+    # recibe su fracción del efecto combinado.
     f_shift = funnel_shift_for(identity)
     p_onb_started = sigmoid(logit(P_ONBOARDING_STARTED) + f_shift)
     p_profile = sigmoid(logit(P_PROFILE_COMPLETED) + f_shift)
@@ -702,6 +719,7 @@ params = {
         "sigma_funnel_logit_per_dimension": SIGMA_FUNNEL_LOGIT,
         "sigma_speed_log_hours_per_dimension": SIGMA_SPEED_LOG_HOURS,
         "sigma_conversion_prob_per_dimension": SIGMA_CONVERSION_PROB,
+        "n_funnel_gates": N_FUNNEL_GATES,
         "funnel_effect": CATEGORY_FUNNEL_EFFECT,
         "speed_effect": CATEGORY_SPEED_EFFECT,
         "conversion_effect": CATEGORY_CONVERSION_EFFECT,
@@ -714,6 +732,18 @@ params = {
         "converted_to_paid -- para que el diagnostico QUIEN->QUE HACE->QUE "
         "RESULTADO tenga señal genuina que descubrir, sin que ningun valor de "
         "catalogo este diseñado de antemano como ganador o perdedor.",
+        "Correccion estructural (revision posterior): la suma de los 6 efectos "
+        "de CATEGORY_FUNNEL_EFFECT se reparte entre las N_FUNNEL_GATES=6 "
+        "transiciones del funnel (funnel_shift_for devuelve total/6) en vez de "
+        "aplicar el desplazamiento completo en cada transicion. Sin esta "
+        "correccion, un efecto individualmente modesto por dimension se "
+        "componia multiplicativamente 6 veces a lo largo del funnel, "
+        "amplificando artificialmente la brecha entre el 10% de usuarios con "
+        "la mejor y la peor combinacion de dimensiones. CATEGORY_SPEED_EFFECT "
+        "y CATEGORY_CONVERSION_EFFECT se aplican una sola vez cada uno (no en "
+        "cadena), por lo que no presentan este problema estructural y no se "
+        "modificaron. Ningun sigma se recalibro ni se elegio ninguna direccion "
+        "de efecto especifica en esta correccion.",
         "session_started no se genera para identidades pre-account (decision "
         "tecnica: unicamente registration_started/registration_completed antes "
         "de crear cuenta, para mantener el modelo de identidad simple y "

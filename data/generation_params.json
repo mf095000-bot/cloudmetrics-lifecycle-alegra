@@ -21,6 +21,7 @@
     "sigma_funnel_logit_per_dimension": 0.1,
     "sigma_speed_log_hours_per_dimension": 0.15,
     "sigma_conversion_prob_per_dimension": 0.02,
+    "n_funnel_gates": 6,
     "funnel_effect": {
       "country": {
         "Mexico": 0.1310301200993295,
@@ -276,6 +277,7 @@
   },
   "notes": [
     "Las dimensiones de usuario (country, role, industry, company_size, use_case, acquisition_channel) se asignan sin condicionar el catalogo en si, pero SI tienen una influencia real (pequeña y difusa, ver category_effects) sobre el funnel, la velocidad hacia First Value y converted_to_paid -- para que el diagnostico QUIEN->QUE HACE->QUE RESULTADO tenga señal genuina que descubrir, sin que ningun valor de catalogo este diseñado de antemano como ganador o perdedor.",
+    "Correccion estructural (revision posterior): la suma de los 6 efectos de CATEGORY_FUNNEL_EFFECT se reparte entre las N_FUNNEL_GATES=6 transiciones del funnel (funnel_shift_for devuelve total/6) en vez de aplicar el desplazamiento completo en cada transicion. Sin esta correccion, un efecto individualmente modesto por dimension se componia multiplicativamente 6 veces a lo largo del funnel, amplificando artificialmente la brecha entre el 10% de usuarios con la mejor y la peor combinacion de dimensiones. CATEGORY_SPEED_EFFECT y CATEGORY_CONVERSION_EFFECT se aplican una sola vez cada uno (no en cadena), por lo que no presentan este problema estructural y no se modificaron. Ningun sigma se recalibro ni se elegio ninguna direccion de efecto especifica en esta correccion.",
     "session_started no se genera para identidades pre-account (decision tecnica: unicamente registration_started/registration_completed antes de crear cuenta, para mantener el modelo de identidad simple y coherente con 02_DATA_GENERATION_SPEC.md seccion 5).",
     "El orden entre los tres eventos de First Value no queda rigidamente fijado a nivel de eventos repetidos: una fraccion de usuarios genera ocurrencias adicionales de data_source_connected/dashboard_created/insight_viewed despues de completar la secuencia inicial."
   ]
